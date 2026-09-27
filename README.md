@@ -68,6 +68,7 @@ Instead, the Python audit engine (`verify_hanoi.py`) operates as an independent 
 Install dependencies:
 ```bash
 pip install pandas openpyxl
+```
 
 ---
 
