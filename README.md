@@ -56,6 +56,7 @@ Instead, the Python audit engine (`verify_hanoi.py`) operates as an independent 
 ├── hanoi_movesGPT4oLeahWilson.xlsx              # Unchecked raw model output
 ├── verify_hanoi.py                              # Deterministic Python validation oracle
 └── README.md                                    # Documentation and technical report
+```
 ---
 
 ## 5. Getting Started & Reproducibility
