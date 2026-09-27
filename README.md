@@ -56,3 +56,29 @@ Instead, the Python audit engine (`verify_hanoi.py`) operates as an independent 
 ├── hanoi_movesGPT4oLeahWilson.xlsx              # Unchecked raw model output
 ├── verify_hanoi.py                              # Deterministic Python validation oracle
 └── README.md                                    # Documentation and technical report
+---
+
+## 5. Getting Started & Reproducibility
+
+### Prerequisites
+* Python 3.9+
+* Required packages: `pandas`, `openpyxl`
+
+Install dependencies:
+```bash
+pip install pandas openpyxl
+
+---
+
+## 6. Multi-Iteration Research Roadmap
+
+Future iterations expand this testbed beyond static single-model audits into a comparative multi-agent benchmarking suite:
+
+* **Iteration 2: Multi-Model Comparative Benchmarking**  
+  Deploy the oracle across multiple model families and parameter scales (such as Claude, Llama 3, Gemini, and GPT-4o) to compare error distributions.
+* **Iteration 3: Heuristic Drift & Directional Bias Analysis**  
+  Analyze token-frequency bias and directional peg preference (such as systematic bias toward Peg 2 over Peg 3) under non-standard starting conditions.
+* **Iteration 4: In-Context Error Recovery and Adaptation Velocity**  
+  Feed execution failure messages directly back into the model prompt to benchmark how rapidly models recover from invalid states without human intervention.
+* **Iteration 5: Cross-Model Review Dynamics**  
+  Evaluate models tasked with auditing other models' move sequences, comparing secondary model judgments directly against the deterministic Python ground truth. 
