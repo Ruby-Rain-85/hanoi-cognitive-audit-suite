@@ -52,6 +52,7 @@ Instead, the Python audit engine (`verify_hanoi.py`) operates as an independent 
 ## 4. Current Repository Structure
 
 ```text
+├── hanoi_moves_programmatically_verified.xlsx      # Shows programmatic check columns
 ├── hanoi_moves_checkedGpt4oLeahWilson.xlsx      # Primary 8-disk dataset (GPT-4o output with human audit)
 ├── hanoi_movesGPT4oLeahWilson.xlsx              # Unchecked raw model output
 ├── verify_hanoi.py                              # Deterministic Python validation oracle
@@ -84,3 +85,26 @@ Future iterations expand this testbed beyond static single-model audits into a c
   Feed execution failure messages directly back into the model prompt to benchmark how rapidly models recover from invalid states without human intervention.
 * **Iteration 5: Cross-Model Review Dynamics**  
   Evaluate models tasked with auditing other models' move sequences, comparing secondary model judgments directly against the deterministic Python ground truth. 
+
+## Model Prompting Protocol for Experimental Replication
+
+To ensure uniform column and row structures that align with the `verify_hanoi.py` validation engine, all model interactions must use the standardized prompt structure below.
+
+### System Prompt
+```text
+You are a deterministic logic engine solving the Tower of Hanoi puzzle.
+You must output only a valid sequence of moves in an excel spreadsheet.
+Do not provide introductory text, explanations, or commentary outside the table.
+Solve the Tower of Hanoi puzzle for 8 disks.
+Goal: Move all 8 disks from Peg 1 to Peg 3 using Peg 2 as an auxiliary peg.
+
+Formatting Constraints:
+1. Provide exactly 7 columns with these exact headers:
+   "Move #", "Disk", "From", "To", "Peg 1", "Peg 2", "Peg 3"
+2. Disks are integers from 1 (smallest) to 8 (largest).
+3. Peg identifiers must be integers: 1, 2, or 3.
+4. "Peg 1", "Peg 2", and "Peg 3" must state the complete configuration of disks on that peg immediately after each move completes.
+5. Format disk lists as comma-separated integers inside brackets, ordered from bottom to top (e.g., [2, 3, 4, 5, 6, 7, 8]).
+6. If a peg is empty, format it strictly as [].
+7. Output the full optimal sequence of discrete moves without truncation.
+```
