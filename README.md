@@ -52,7 +52,7 @@ Instead, the Python audit engine (`verify_hanoi.py`) operates as an independent 
 ## 4. Current Repository Structure
 
 ```text
-├── hanoi_moves_programmatically_verified.xlsx      # Shows programmatic check columns
+├── hanoi_moves_programmatically_verified.xlsx   # Shows programmatic check columns
 ├── hanoi_moves_checkedGpt4oLeahWilson.xlsx      # Primary 8-disk dataset (GPT-4o output with human audit)
 ├── hanoi_movesGPT4oLeahWilson.xlsx              # Unchecked raw model output
 ├── verify_hanoi.py                              # Deterministic Python validation oracle
