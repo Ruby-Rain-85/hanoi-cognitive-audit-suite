@@ -1,6 +1,21 @@
 # Import pandas to parse and update Excel files
 import pandas as pd
 import sys
+import re
+
+def parse_peg_cell(cell_val):
+    """Safely extracts disk integers from diverse cell formats (e.g.
+
+    '[1, 2]', '1, 2', or empty).
+    """
+    if pd.isna(cell_val):
+        return []
+    val_str = str(cell_val).strip()
+    if val_str in ["", "[]", "None", "nan"]:
+        return []
+    # Extract all consecutive digit sequences
+    digits = re.findall(r"\d+", val_str)
+    return [int(d) for d in digits]
 
 # Define the validation function accepting input file, output file, and disk count
 def validate_hanoi_experiment(
@@ -11,6 +26,12 @@ def validate_hanoi_experiment(
 
     # Detect whether a human check column exists in the spreadsheet
     has_human_check = "Human Check" in df.columns
+
+    # Detect whether the the spreadsheet contains a visual depiction of
+    # the model's perception of the board state
+    has_visual_pegs = all(
+        col in df.columns for col in ["Peg 1", "Peg 2", "Peg 3"]
+    )
 
     # Initialize the board state with disks 1 through num_discs on Peg 1
     # Peg 1 starts full; Peg 2 and Peg 3 start empty
@@ -25,6 +46,10 @@ def validate_hanoi_experiment(
 
     # Initialize an empty list to track matches against human reviews if present
     human_matches = []
+
+    # Initialize a list that holds the values indicating if the output
+    # is a correct visual match for the internal state of the board
+    visual_matches = []
 
     # Iterate through every row in the DataFrame using index idx and row data
     for idx, row in df.iterrows():
@@ -51,6 +76,9 @@ def validate_hanoi_experiment(
             if has_human_check:
                 # Flag comparison as an error
                 human_matches.append("ERROR")
+            # check if visual depiction of board exists
+            if has_visual_pegs:
+                visual_matches.append("UNCHECKED")
 
             # Advance to the next spreadsheet row
             continue
@@ -73,6 +101,9 @@ def validate_hanoi_experiment(
                 )
                 human_matches.append(match)
 
+            if has_visual_pegs:
+                visual_matches.append("UNCHECKED")
+
             # Skip board execution
             continue
 
@@ -93,6 +124,10 @@ def validate_hanoi_experiment(
                     else "DISCREPANCY"
                 )
                 human_matches.append(match)
+            
+            # Checks the visual matches, does not check yet
+            if has_visual_pegs:
+                visual_matches.append("UNCHECKED")
 
             # Skip board execution
             continue
@@ -120,6 +155,10 @@ def validate_hanoi_experiment(
                 )
                 human_matches.append(match)
 
+            #Continues to confirm visual column output
+            if has_visual_pegs:
+                visual_matches.append("UNCHECKED")
+
             # Skip board execution
             continue
 
@@ -143,6 +182,10 @@ def validate_hanoi_experiment(
                 )
                 human_matches.append(match)
 
+            # Continues to confirm visual column
+            if has_visual_pegs:
+                visual_matches.append("UNCHECKED")
+
             # Skip board execution
             continue
 
@@ -165,6 +208,10 @@ def validate_hanoi_experiment(
                     else "DISCREPANCY"
                 )
                 human_matches.append(match)
+
+            # Continues to confirm visual column
+            if has_visual_pegs:
+                visual_matches.append("UNCHECKED")
 
             # Skip board execution
             continue
@@ -190,6 +237,18 @@ def validate_hanoi_experiment(
                 "MATCH" if human_val == "legal" else "DISCREPANCY"
             )
 
+        # 7. Visual State Consistency Check
+        if has_visual_pegs:
+            v_p1 = parse_peg_cell(row["Peg 1"])
+            v_p2 = parse_peg_cell(row["Peg 2"])
+            v_p3 = parse_peg_cell(row["Peg 3"])
+
+            # Does the model's reported visual state match ground truth?
+            if v_p1 == pegs[1] and v_p2 == pegs[2] and v_p3 == pegs[3]:
+                visual_matches.append("MATCH")
+            else:
+                visual_matches.append("DRIFT")
+
     # Append the programmatic validation column to the DataFrame
     df["Programmatic Validation"] = prog_validation
 
@@ -200,6 +259,11 @@ def validate_hanoi_experiment(
     if has_human_check:
         # Assign comparison column
         df["Programmatic Match Human"] = human_matches
+
+    # If the visual states of Peg 1, Peg 2, and Peg 3 are correct, 
+    # outputs a message
+    if has_visual_pegs:
+        df["Visual State Match"] = visual_matches
 
     # Write the modified DataFrame to the output Excel path
     df.to_excel(output_file, index=False)
@@ -225,6 +289,14 @@ def validate_hanoi_experiment(
         print(f"Discrepancies vs Human Check: {discrepancy_count}")
     else:
         print("Human Check Column: Not present (Automated mode)")
+
+
+    # Output the counts of correct and incorrect visual state cells.
+    if has_visual_pegs:
+        drift_count = visual_matches.count("DRIFT")
+        unchecked_count = visual_matches.count("UNCHECKED")
+        valid_matches = visual_matches.count("MATCH")
+        print(f"Visual Peg Alignment: {valid_matches} MATCH, {drift_count} DRIFT, {unchecked_count} UNCHECKED")
 
     print(f"Output saved to: {output_file}")
 
