@@ -2,27 +2,115 @@
 import pandas as pd
 import sys
 import re
+# Construct filenames without splitting directory names or dotted stems.
+from pathlib import Path
 
+# Adds helper function to filter out invalid values before passing them
+# to the rest of the code
+def parse_integer(value, field_name):
+    """Accept whole-number values without silently truncating fractions."""
+
+    # A missing value cannot identify a move, disk, or peg.
+    if pd.isna(value):
+        raise ValueError(f"{field_name} is missing")
+
+    # Booleans are not identifiers, even though Python treats True as 1.
+    if isinstance(value, bool):
+        raise ValueError(f"{field_name} must be an integer")
+
+    # Convert the scalar to stripped text so Excel integers and floats
+    # can be validated using the same rule.
+    text = str(value).strip()
+
+    # Accept integer text and decimal text containing only zeroes
+    # after the decimal point. Reject fractions and unrelated text.
+    if re.fullmatch(r"[+-]?\d+(?:\.0+)?", text) is None:
+        raise ValueError(f"{field_name} must be an integer: {value!r}")
+
+    # Remove the optional zero-only decimal portion after validation.
+    integer_text = text.split(".", 1)[0]
+
+    # Normalize the validated identifier to a Python integer.
+    return int(integer_text)
+
+# Improved def parse_peg_cell to ensure that only correct numerical
+# values are used.
 def parse_peg_cell(cell_val):
-    """Safely extracts disk integers from diverse cell formats (e.g.
+    """Parse a top-to-bottom disk list without repairing malformed text."""
 
-    '[1, 2]', '1, 2', or empty).
-    """
+    # Treat a blank spreadsheet cell as an empty peg.
     if pd.isna(cell_val):
         return []
-    val_str = str(cell_val).strip()
-    if val_str in ["", "[]", "None", "nan"]:
+
+    # Normalize surrounding whitespace.
+    text = str(cell_val).strip()
+
+    # Accept the explicit empty-peg formats.
+    if text in ("", "[]"):
         return []
-    # Extract all consecutive digit sequences
-    digits = re.findall(r"\d+", val_str)
-    return [int(d) for d in digits]
+
+    # If either bracket appears, require a complete bracketed list.
+    if text.startswith("[") or text.endswith("]"):
+        if not (text.startswith("[") and text.endswith("]")):
+            raise ValueError(f"Unbalanced peg brackets: {cell_val!r}")
+
+        # Remove the outer brackets before parsing the contents.
+        text = text[1:-1].strip()
+
+        # Allow an empty bracketed list containing whitespace.
+        if not text:
+            return []
+
+    # Require positive integer tokens separated by commas.
+    # This rejects signs, fractions, words, and missing entries.
+    if re.fullmatch(r"\d+(?:\s*,\s*\d+)*", text) is None:
+        raise ValueError(f"Invalid peg list: {cell_val!r}")
+
+    # Preserve the listed order, which represents top to bottom.
+    disks = [int(token.strip()) for token in text.split(",")]
+
+    # Disk zero does not exist in this experiment.
+    if any(disk < 1 for disk in disks):
+        raise ValueError(f"Disk numbers must be positive: {cell_val!r}")
+
+    return disks
 
 # Define the validation function accepting input file, output file, and disk count
 def validate_hanoi_experiment(
     input_file: str, output_file: str, num_discs: int = 8
 ):
-    # Read the Excel spreadsheet into a pandas DataFrame
+    # Validate the configured disk count before constructing the board.
+    num_discs = parse_integer(num_discs, "num_discs")
+
+    # A Tower of Hanoi experiment must contain at least one disk.
+    if num_discs < 1:
+        raise ValueError("num_discs must be at least 1")
+
+    # Read the first worksheet, matching the supplied workbooks.
     df = pd.read_excel(input_file)
+
+    # Require the fields needed to interpret each move.
+    required_columns = {"Move #", "Disk", "From", "To"}
+
+    # Identify missing fields before evaluating any rows.
+    missing_columns = required_columns - set(df.columns)
+
+    # Stop with a useful explanation if the schema is incomplete.
+    if missing_columns:
+        raise ValueError(
+            f"Missing required columns: {', '.join(sorted(missing_columns))}"
+        )
+
+    # Detect whether any visual peg columns are present.
+    visual_columns = {"Peg 1", "Peg 2", "Peg 3"}
+    present_visual_columns = visual_columns.intersection(df.columns)
+
+    # A partial board depiction cannot be checked reliably.
+    if present_visual_columns and present_visual_columns != visual_columns:
+        missing_visual = visual_columns - present_visual_columns
+        raise ValueError(
+            f"Missing visual columns: {', '.join(sorted(missing_visual))}"
+        ) 
 
     # Detect whether a human check column exists in the spreadsheet
     has_human_check = "Human Check" in df.columns
@@ -51,37 +139,53 @@ def validate_hanoi_experiment(
     # is a correct visual match for the internal state of the board
     visual_matches = []
 
-    # Iterate through every row in the DataFrame using index idx and row data
-    for idx, row in df.iterrows():
-        # Begin try block to handle malformed, non-numeric cell contents
+    # Record numbering problems separately from physical move legality.
+    move_number_checks = []
+
+    # Track the expected move number independently of DataFrame labels.
+    for expected_move, (_, row) in enumerate(df.iterrows(), start=1):
+
+        # Check whether the reported move number matches its row position.
         try:
-            # Convert the source peg value to an integer
-            source = int(row["From"])
+            reported_move = parse_integer(row["Move #"], "Move #")
+            number_check = (
+                "MATCH"
+                if reported_move == expected_move
+                else f"Expected {expected_move}, found {reported_move}"
+            )
 
-            # Convert the target peg value to an integer
-            dest = int(row["To"])
+        # Record missing or malformed move numbers.
+        except ValueError as exc:
+            number_check = str(exc)
 
-            # Convert the claimed moving disk to an integer
-            claimed_disc = int(row["Disk"])
+        # Record one numbering result for every row.
+        move_number_checks.append(number_check)
 
-        # Catch data conversion errors from unexpected text or empty cells
-        except (ValueError, TypeError):
-            # Mark the move as illegal due to invalid input
+        # Validate move identifiers before converting them to integers.
+        try:
+            source = parse_integer(row["From"], "From")
+            dest = parse_integer(row["To"], "To")
+            claimed_disc = parse_integer(row["Disk"], "Disk")
+
+        # Record malformed move data without changing the board.
+        except ValueError as exc:
             prog_validation.append("Illegal")
+            failure_reasons.append(str(exc))
 
-            # Document the non-numeric data issue
-            failure_reasons.append("Non-integer peg or disk data")
-
-            # Check if human comparison is active
+            # Compare the verdict with the human annotation.
             if has_human_check:
-                # Flag comparison as an error
-                human_matches.append("ERROR")
-            # check if visual depiction of board exists
+                human_val = str(row["Human Check"]).strip().lower()
+                human_matches.append(
+                    "MATCH" if human_val == "illegal" else "DISCREPANCY"
+                )
+
+            # Skip visual comparison when move identifiers are invalid.
             if has_visual_pegs:
                 visual_matches.append("UNCHECKED")
 
-            # Advance to the next spreadsheet row
+            # Evaluate the next row against the unchanged board.
             continue
+
 
         # Rule 1: Verify source and destination pegs are valid identifiers (1, 2, or 3)
         if source not in pegs or dest not in pegs:
@@ -238,16 +342,27 @@ def validate_hanoi_experiment(
             )
 
         # 7. Visual State Consistency Check
-        if has_visual_pegs:
-            v_p1 = parse_peg_cell(row["Peg 1"])
-            v_p2 = parse_peg_cell(row["Peg 2"])
-            v_p3 = parse_peg_cell(row["Peg 3"])
+        # Replaced with code that improves the accuracy
+        # of the visual state check, adding three new
+        # distinct outcomes; match, drift and invalid
 
-            # Does the model's reported visual state match ground truth?
-            if v_p1 == pegs[1] and v_p2 == pegs[2] and v_p3 == pegs[3]:
-                visual_matches.append("MATCH")
+        # Compare the reported post-move board with the simulated board.
+        if has_visual_pegs:
+            try:
+                reported_pegs = {
+                    1: parse_peg_cell(row["Peg 1"]),
+                    2: parse_peg_cell(row["Peg 2"]),
+                    3: parse_peg_cell(row["Peg 3"]),
+                }
+
+            # Distinguish malformed visual data from a valid but wrong state.
+            except ValueError:
+                visual_matches.append("INVALID")
+
             else:
-                visual_matches.append("DRIFT")
+                visual_matches.append(
+                    "MATCH" if reported_pegs == pegs else "DRIFT"
+                )
 
     # Append the programmatic validation column to the DataFrame
     df["Programmatic Validation"] = prog_validation
@@ -266,6 +381,11 @@ def validate_hanoi_experiment(
         df["Visual State Match"] = visual_matches
 
     # Write the modified DataFrame to the output Excel path
+    # Include sequence-label findings alongside move and visual findings.
+    df["Move Number Check"] = move_number_checks
+    
+    # Write the DataFrame, including validation results, to the output Excel file.
+    # Exclude the pandas row index so it does not become an extra spreadsheet column.
     df.to_excel(output_file, index=False)
 
     # Compute total rows evaluated
@@ -276,12 +396,52 @@ def validate_hanoi_experiment(
 
     # Count illegal moves found
     illegal_count = prog_validation.count("Illegal")
+    # This experiment starts on Peg 1 and targets Peg 3.
+    expected_final_board = {
+        1: [],
+        2: [],
+        3: list(range(1, num_discs + 1)),
+    }
 
+    # Check the simulated final board, independent of visual claims.
+    goal_reached = pegs == expected_final_board
+
+    # Count numbering errors.
+    numbering_error_count = sum(
+        result != "MATCH" for result in move_number_checks
+    )
+
+    # A valid complete solve requires every listed move to be legal.
+    legal_complete_solve = illegal_count == 0 and goal_reached
+
+    # An optimal solve must also use the minimum possible move count.
+    optimal_solve = legal_complete_solve and total_moves == optimal_moves
+
+    # Require matching visuals when visual columns are provided.
+    visual_report_correct = (
+        all(result == "MATCH" for result in visual_matches)
+        if has_visual_pegs
+        else True
+    )
+
+    # Combine the physical solve and reporting requirements.
+    experiment_passed = (
+        optimal_solve
+        and numbering_error_count == 0
+        and visual_report_correct
+    )
+
+    print(f"Experiment Passed: {experiment_passed}")
     # Output verification summary
     print("--- Validation Summary ---")
     print(f"Total Moves Analyzed: {total_moves}")
     print(f"Optimal Move Target (2^{num_discs} - 1): {optimal_moves}")
     print(f"Illegal Moves Detected: {illegal_count}")
+    print(f"Move Number Errors: {numbering_error_count}")
+    #Added additional information to be displayed
+    print(f"Goal Reached on Peg 3: {goal_reached}")
+    print(f"Legal Complete Solve: {legal_complete_solve}")
+    print(f"Optimal Solve: {optimal_solve}")
 
     # Output discrepancy count only if human check was performed
     if has_human_check:
@@ -292,11 +452,18 @@ def validate_hanoi_experiment(
 
 
     # Output the counts of correct and incorrect visual state cells.
+    # Summarize every visual-check outcome.
     if has_visual_pegs:
         drift_count = visual_matches.count("DRIFT")
+        invalid_count = visual_matches.count("INVALID")
         unchecked_count = visual_matches.count("UNCHECKED")
         valid_matches = visual_matches.count("MATCH")
-        print(f"Visual Peg Alignment: {valid_matches} MATCH, {drift_count} DRIFT, {unchecked_count} UNCHECKED")
+
+        print(
+            f"Visual Peg Alignment: {valid_matches} MATCH, "
+            f"{drift_count} DRIFT, {invalid_count} INVALID, "
+            f"{unchecked_count} UNCHECKED"
+        )
 
     print(f"Output saved to: {output_file}")
 
@@ -310,9 +477,16 @@ if __name__ == "__main__":
         output_file = (
             sys.argv[2]
             if len(sys.argv) > 2
-            else f"verified_{input_file.split('.')[0]}.xlsx"
+            # If no output path is provided, save beside the input file
+            # using its filename stem with a "verified_" prefix and ".xlsx" extension.
+            else str(
+                Path(input_file).with_name(
+                    f"verified_{Path(input_file).stem}.xlsx"
+                )
+            )
         )
-        num_discs = int(sys.argv[3]) if len(sys.argv) > 3 else 8
+        # Let the validation function apply the same strict integer rule.
+        num_discs = sys.argv[3] if len(sys.argv) > 3 else 8
     else:
         # Default fallback if no arguments are provided
         input_file = "Copy of hanoi_moves_checkedGpt4oLeahWilson.xlsx"
