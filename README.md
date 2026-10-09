@@ -50,10 +50,6 @@ Instead, the Python audit engine (`verify_hanoi.py`) operates as an independent 
 ---
 
 ## 4. Current Repository Structure
-
-```text
-## 4. Current Repository Structure
-
 ```text
 hanoi-cognitive-audit-suite/
 ├── LICENSE
