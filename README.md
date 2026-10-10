@@ -53,6 +53,7 @@ Instead, the Python audit engine (`verify_hanoi.py`) operates as an independent 
 ```text
 hanoi-cognitive-audit-suite/
 ├── LICENSE
+├── PIL_Metadata_Template_v2
 ├── README.md
 ├── verify_hanoi.py                              # Move, state, and solve verifier
 ├── create_corrupt_sheet.py                      # Negative-test data generator
