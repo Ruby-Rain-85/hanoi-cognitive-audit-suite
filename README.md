@@ -50,13 +50,21 @@ Instead, the Python audit engine (`verify_hanoi.py`) operates as an independent 
 ---
 
 ## 4. Current Repository Structure
-
 ```text
-├── hanoi_moves_programmatically_verified.xlsx   # Shows programmatic check columns
-├── hanoi_moves_checkedGpt4oLeahWilson.xlsx      # Primary 8-disk dataset (GPT-4o output with human audit)
-├── hanoi_movesGPT4oLeahWilson.xlsx              # Unchecked raw model output
-├── verify_hanoi.py                              # Deterministic Python validation oracle
-└── README.md                                    # Documentation and technical report
+hanoi-cognitive-audit-suite/
+├── LICENSE
+├── README.md
+├── verify_hanoi.py                              # Move, state, and solve verifier
+├── create_corrupt_sheet.py                      # Negative-test data generator
+├── hanoi_gpt4o_8disks.xlsx                       # Original model output
+├── hanoi_gpt4o_8disks_verified.xlsx              # Verified model output
+├── hanoi_gpt4o_8disks_human_checked.xlsx          # Human-audited model output
+├── hanoi_gpt4o_8disks_human_checked_verified.xlsx # Verified human-audited output
+├── test_corrupt_hanoi.xlsx                      # Corrupted test input
+├── verified_corrupt_results.xlsx                # Corrupted-input validation results
+├── Copy of hanoi_movesGPT4oLeahWilson.xlsx        # Earlier input copy
+├── Copy of hanoi_moves_checkedGpt4oLeahWilson.xlsx # Earlier human-checked copy
+└── hanoi_moves_programmatically_verified.xlsx   # Earlier validation output # Documentation and technical report
 ```
 ---
 
