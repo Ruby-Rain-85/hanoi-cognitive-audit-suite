@@ -1,0 +1,15 @@
+
+# Python cache files
+__pycache__/
+*.py[cod]
+
+# Local Python virtual environment
+.venv/
+
+# Temporary generated Hanoi test spreadsheets
+test_corrupt_hanoi*.xlsx
+test_seed_*.xlsx
+verified_seed_*.xlsx
+
+# Future temporary test outputs
+tests/generated/

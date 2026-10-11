@@ -249,14 +249,130 @@ def construct_fault(error, pegs, disk, source, destination):
 
     return disk, source, destination, human_label
 
+#
+def get_eligible_faults(pegs):
+    """
+    Determine which fault types can be constructed
+    from the current authoritative board state.
 
-def generate_corrupt_hanoi_sheet(num_disks: int, filename: str):
+    This function must not modify the board.
+    """
+
+    eligible = {
+        "Malformed Data",
+        "Invalid Peg ID",
+        "Ghost Disk",
+        "Identical Pegs",
+        "Visual Drift",
+        "Human Discrepancy",
+    }
+
+    # An empty-source fault requires an empty peg.
+    if any(not disks for disks in pegs.values()):
+        eligible.add("Empty Source Peg")
+
+    # A size inversion requires two occupied pegs
+    # whose top disks have different sizes.
+    inversion_possible = any(
+        source != destination
+        and pegs[source]
+        and pegs[destination]
+        and pegs[source][0] > pegs[destination][0]
+        for source in pegs
+        for destination in pegs
+    )
+
+    if inversion_possible:
+        eligible.add("Size Inversion")
+
+    return eligible
+
+#
+def plan_fault_locations(base_moves, num_disks, fault_types, seed):
+    """
+    Assign each fault to a distinct eligible reference move.
+
+    The first reference move is reserved as a clean baseline.
+    A local random generator ensures reproducibility.
+    """
+
+    rng = random.Random(seed)
+
+    # Reconstruct the clean board trajectory.
+    pegs = {1: list(range(1, num_disks + 1)), 2: [], 3: []}
+
+    eligible_indices = {fault: [] for fault in fault_types}
+
+    for idx, (disk, source, destination) in enumerate(base_moves):
+
+        if idx > 0:
+            available = get_eligible_faults(pegs)
+
+            for fault in fault_types:
+                if fault in available:
+                    eligible_indices[fault].append(idx)
+
+        legal, reason = apply_hanoi_move(
+            pegs, disk, source, destination
+        )
+
+        if not legal:
+            raise AssertionError(
+                f"Invalid reference move {idx + 1}: {reason}"
+            )
+
+    # Assign the most constrained faults first.
+    ordered_faults = sorted(
+        fault_types,
+        key=lambda fault: len(eligible_indices[fault])
+    )
+
+    assignments = {}
+    used_indices = set()
+
+    def assign(position):
+        if position == len(ordered_faults):
+            return True
+
+        fault = ordered_faults[position]
+        candidates = eligible_indices[fault].copy()
+        rng.shuffle(candidates)
+
+        for idx in candidates:
+            if idx in used_indices:
+                continue
+
+            assignments[fault] = idx
+            used_indices.add(idx)
+
+            if assign(position + 1):
+                return True
+
+            used_indices.remove(idx)
+            del assignments[fault]
+
+        return False
+
+    if not assign(0):
+        raise ValueError(
+            "Unable to place every fault at a distinct eligible "
+            f"reference move using {num_disks} disks."
+        )
+
+    return assignments
+
+
+
+#
+def generate_corrupt_hanoi_sheet(
+    num_disks: int,
+    filename: str,
+    seed: int = 42,
+):
     """
     Generates a Hanoi test spreadsheet containing every error condition
     checked by verify_hanoi.py across an optimal 2^n - 1 move sequence.
     """
-    # Fix the random seed to produce reproducible row selections
-    random.seed(42)
 
     # Compute optimal move count using the recurrence relation limit 2^n - 1
     total_moves = (2**num_disks) - 1
@@ -270,11 +386,8 @@ def generate_corrupt_hanoi_sheet(num_disks: int, filename: str):
 
     # replaced current solver with an optimal reference sequence
     base_moves = generate_optimal_moves(num_disks)
-
-    # Select distinct reference moves for fault injection.
-    available_indices = list(range(1, total_moves))
-    random.shuffle(available_indices)
-
+   
+    # Define the negative-test scenarios.
     fault_types = [
         "Malformed Data",
         "Invalid Peg ID",
@@ -286,10 +399,13 @@ def generate_corrupt_hanoi_sheet(num_disks: int, filename: str):
         "Human Discrepancy",
     ]
 
-    error_mapping = {
-        fault: available_indices.pop()
-        for fault in fault_types
-    }
+    # Select distinct locations where each fault is possible.
+    error_mapping = plan_fault_locations(
+        base_moves,
+        num_disks,
+        fault_types,
+        seed,
+    )
 
     index_to_error = {
         index: fault
@@ -453,6 +569,50 @@ def test_board_simulator():
 
     print("Board simulator tests passed.")
 
+    
+def test_fault_planner():
+    fault_types = [
+        "Malformed Data",
+        "Invalid Peg ID",
+        "Empty Source Peg",
+        "Ghost Disk",
+        "Size Inversion",
+        "Identical Pegs",
+        "Visual Drift",
+        "Human Discrepancy",
+    ]
+
+    moves = generate_optimal_moves(4)
+
+    first = plan_fault_locations(moves, 4, fault_types, 42)
+    second = plan_fault_locations(moves, 4, fault_types, 42)
+
+    # The same seed must produce identical assignments.
+    assert first == second
+
+    # Every fault must receive one unique reference position.
+    assert set(first) == set(fault_types)
+    assert len(set(first.values())) == len(fault_types)
+
+    # The first move must remain clean.
+    assert all(index > 0 for index in first.values())
+
+    # Check that every assignment is actually eligible.
+    pegs = {1: [1, 2, 3, 4], 2: [], 3: []}
+
+    for idx, (disk, source, destination) in enumerate(moves):
+        for fault, assigned_idx in first.items():
+            if assigned_idx == idx:
+                assert fault in get_eligible_faults(pegs)
+
+        legal, reason = apply_hanoi_move(
+            pegs, disk, source, destination
+        )
+        assert legal, reason
+
+    print("Fault placement planner tests passed.")
+
+
 
 # Define entry point for execution via command-line arguments
 if __name__ == "__main__":
@@ -477,9 +637,21 @@ if __name__ == "__main__":
         help="Output filename (default: test_corrupt_hanoi.xlsx)",
     )
 
+    #
+    parser.add_argument(
+    "--seed",
+    type=int,
+    default=42,
+    help="Random seed for reproducible fault placement (default: 42)",
+)
+
     # Parse arguments from command line
     args = parser.parse_args()
 
     # Call generator function
-    generate_corrupt_hanoi_sheet(num_disks=args.disks, filename=args.output)
+    generate_corrupt_hanoi_sheet(
+    num_disks=args.disks,
+    filename=args.output,
+    seed=args.seed,
+)
     
