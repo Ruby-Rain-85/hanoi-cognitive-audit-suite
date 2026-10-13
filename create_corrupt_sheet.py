@@ -98,7 +98,80 @@ def snapshot_board(
         peg: disks.copy()
         for peg, disks in pegs.items()
     }
+FAULT_EXPECTATIONS = {
+    "Malformed Data": {
+        "move_legal": False,
+        "failure_category": "malformed_identifier",
+    },
+    "Invalid Peg ID": {
+        "move_legal": False,
+        "failure_category": "invalid_peg",
+    },
+    "Empty Source Peg": {
+        "move_legal": False,
+        "failure_category": "empty_source",
+    },
+    "Ghost Disk": {
+        "move_legal": False,
+        "failure_category": "disk_mismatch",
+    },
+    "Size Inversion": {
+        "move_legal": False,
+        "failure_category": "size_inversion",
+    },
+    "Identical Pegs": {
+        "move_legal": False,
+        "failure_category": "identical_pegs",
+    },
+    "Visual Drift": {
+        "move_legal": True,
+        "failure_category": None,
+        "visual_result": "DRIFT",
+    },
+    "Human Discrepancy": {
+        "move_legal": True,
+        "failure_category": None,
+        "human_discrepancy": True,
+    },
+}
 
+#
+FAILURE_PATTERNS = {
+    "invalid_peg": "Invalid peg ID:",
+    "empty_source": "is empty",
+    "disk_mismatch": "is not top disc",
+    "size_inversion": "placed on smaller disc",
+    "identical_pegs": "are identical",
+}
+
+#
+def check_fault_result(fault, verdict, failure_reason):
+    """
+    Compare one verifier result with the expected fault behavior.
+
+    Returns True when the legality verdict and failure reason
+    match the fault specification.
+    """
+    if fault not in FAULT_EXPECTATIONS:
+        raise ValueError(f"Unknown fault type: {fault}")
+
+    expected = FAULT_EXPECTATIONS[fault]
+    expected_verdict = "Legal" if expected["move_legal"] else "Illegal"
+
+    if verdict != expected_verdict:
+        return False
+
+    category = expected["failure_category"]
+
+    if category is None:
+        return not failure_reason or str(failure_reason).strip().lower() == "nan"
+
+    if category == "malformed_identifier":
+        # We will check the exact parsing message separately.
+        return bool(failure_reason) and str(failure_reason).strip().lower() != "nan"
+
+    pattern = FAILURE_PATTERNS[category]
+    return pattern in str(failure_reason)
 
 def construct_fault(error, pegs, disk, source, destination):
     """
@@ -568,6 +641,50 @@ def test_board_simulator():
     assert saved_state == {1: [2, 3], 2: [], 3: [1]}
 
     print("Board simulator tests passed.")
+
+#
+def test_fault_results():
+    """
+    Test expected fault classifications against sample verifier results.
+    """
+
+    # A correctly classified illegal move should pass.
+    assert check_fault_result(
+        "Ghost Disk",
+        "Illegal",
+        "Disc 9 is not top disc of peg 1 (Top is 1)"
+    )
+
+    # An incorrect rejection reason should fail.
+    assert not check_fault_result(
+        "Ghost Disk",
+        "Illegal",
+        "Source peg 1 is empty"
+    )
+
+    # An incorrect legality verdict should fail.
+    assert not check_fault_result(
+        "Ghost Disk",
+        "Legal",
+        ""
+    )
+
+    # A legal reporting fault should pass the legality check.
+    assert check_fault_result(
+        "Visual Drift",
+        "Legal",
+        ""
+    )
+
+    # An unknown fault should raise an exception.
+    try:
+        check_fault_result("Unknown Fault", "Illegal", "Invalid peg")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("Unknown fault was not rejected")
+
+    print("Fault result tests passed.")
 
     
 def test_fault_planner():
