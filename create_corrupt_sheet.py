@@ -5,14 +5,447 @@ import random
 # Import pandas to create and export the spreadsheet structure
 import pandas as pd
 
+# generates optimal move sets and stores them for later comparison
+def generate_optimal_moves(num_disks: int) -> list[tuple[int, int, int]]:
+    """
+    Generate the optimal Tower of Hanoi move sequence.
 
-def generate_corrupt_hanoi_sheet(num_disks: int, filename: str):
+    Each move is represented as:
+        (disk, source_peg, destination_peg)
+
+    The puzzle starts on Peg 1 and ends on Peg 3.
+    """
+
+    # Store the complete sequence of legal moves.
+    moves = []
+
+    def solve(n, source, target, auxiliary):
+        # Base case: move the smallest remaining disk.
+        if n == 1:
+            moves.append((1, source, target))
+            return
+
+        # Move the smaller disks to the auxiliary peg.
+        solve(n - 1, source, auxiliary, target)
+
+        # Move the largest disk in this recursive step.
+        moves.append((n, source, target))
+
+        # Move the smaller disks onto the target peg.
+        solve(n - 1, auxiliary, target, source)
+
+    solve(num_disks, 1, 3, 2)
+
+    return moves
+
+#
+def apply_hanoi_move(
+    pegs: dict[int, list[int]],
+    disk: int,
+    source: int,
+    destination: int
+) -> tuple[bool, str]:
+    """
+    Validate and conditionally execute one Tower of Hanoi move.
+
+    Returns:
+        (True, "Legal") when the move is accepted.
+        (False, reason) when the move is rejected.
+
+    Rejected moves must never modify the board.
+    """
+
+    # Rule 1: Source and destination must be valid pegs.
+    if source not in pegs or destination not in pegs:
+        return False, "Invalid peg ID"
+
+    # Rule 2: Source and destination must differ.
+    if source == destination:
+        return False, "Identical source and destination"
+
+    # Rule 3: Cannot move a disk from an empty peg.
+    if not pegs[source]:
+        return False, "Empty source peg"
+
+    # Rule 4: The claimed disk must be the top disk.
+    actual_top = pegs[source][0]
+
+    if disk != actual_top:
+        return False, "Disk is not the top disk"
+
+    # Rule 5: Cannot place a larger disk on a smaller disk.
+    if pegs[destination] and disk > pegs[destination][0]:
+        return False, "Larger disk onto smaller disk"
+
+    # All checks passed. Execute the legal move.
+    moving_disk = pegs[source].pop(0)
+    pegs[destination].insert(0, moving_disk)
+
+    return True, "Legal"
+
+#
+def snapshot_board(
+    pegs: dict[int, list[int]]
+) -> dict[int, list[int]]:
+    """
+    Return an independent copy of the current board.
+
+    This prevents later moves from changing earlier
+    recorded visual states.
+    """
+
+    return {
+        peg: disks.copy()
+        for peg, disks in pegs.items()
+    }
+FAULT_EXPECTATIONS = {
+    "Malformed Data": {
+        "move_legal": False,
+        "failure_category": "malformed_identifier",
+    },
+    "Invalid Peg ID": {
+        "move_legal": False,
+        "failure_category": "invalid_peg",
+    },
+    "Empty Source Peg": {
+        "move_legal": False,
+        "failure_category": "empty_source",
+    },
+    "Ghost Disk": {
+        "move_legal": False,
+        "failure_category": "disk_mismatch",
+    },
+    "Size Inversion": {
+        "move_legal": False,
+        "failure_category": "size_inversion",
+    },
+    "Identical Pegs": {
+        "move_legal": False,
+        "failure_category": "identical_pegs",
+    },
+    "Visual Drift": {
+        "move_legal": True,
+        "failure_category": None,
+        "visual_result": "DRIFT",
+    },
+    "Human Discrepancy": {
+        "move_legal": True,
+        "failure_category": None,
+        "human_discrepancy": True,
+    },
+}
+
+#
+FAILURE_PATTERNS = {
+    "invalid_peg": "Invalid peg ID:",
+    "empty_source": "is empty",
+    "disk_mismatch": "is not top disc",
+    "size_inversion": "placed on smaller disc",
+    "identical_pegs": "are identical",
+}
+
+#
+def check_fault_result(fault, verdict, failure_reason):
+    """
+    Compare one verifier result with the expected fault behavior.
+
+    Returns True when the legality verdict and failure reason
+    match the fault specification.
+    """
+    if fault not in FAULT_EXPECTATIONS:
+        raise ValueError(f"Unknown fault type: {fault}")
+
+    expected = FAULT_EXPECTATIONS[fault]
+    expected_verdict = "Legal" if expected["move_legal"] else "Illegal"
+
+    if verdict != expected_verdict:
+        return False
+
+    category = expected["failure_category"]
+
+    if category is None:
+        return not failure_reason or str(failure_reason).strip().lower() == "nan"
+
+    if category == "malformed_identifier":
+        # We will check the exact parsing message separately.
+        return bool(failure_reason) and str(failure_reason).strip().lower() != "nan"
+
+    pattern = FAILURE_PATTERNS[category]
+    return pattern in str(failure_reason)
+
+def construct_fault(error, pegs, disk, source, destination):
+    """
+    Construct a faulty move proposal without changing the board.
+
+    Returns:
+        disk, source, destination, human_label
+
+    Visual-only and human-label faults retain legal moves.
+    """
+
+    human_label = "Legal"
+
+    if error == "Malformed Data":
+        source = "one"
+        human_label = "Illegal"
+
+    elif error == "Invalid Peg ID":
+        destination = 4
+        human_label = "Illegal"
+
+    elif error == "Empty Source Peg":
+        empty_pegs = [p for p in pegs if not pegs[p]]
+
+        if not empty_pegs:
+            raise ValueError("No empty peg available for this fault")
+
+        source = empty_pegs[0]
+        destination = next(p for p in pegs if p != source)
+        human_label = "Illegal"
+
+    elif error == "Ghost Disk":
+        disk = max(
+            d for disks in pegs.values() for d in disks
+        ) + 1
+        human_label = "Illegal"
+
+    elif error == "Size Inversion":
+        candidates = [
+            (src, dst)
+            for src in pegs
+            for dst in pegs
+            if src != dst
+            and pegs[src]
+            and pegs[dst]
+            and pegs[src][0] > pegs[dst][0]
+        ]
+
+        if not candidates:
+            raise ValueError("No size inversion available for this board")
+
+        source, destination = candidates[0]
+        disk = pegs[source][0]
+        human_label = "Illegal"
+
+    elif error == "Identical Pegs":
+        occupied = [p for p in pegs if pegs[p]]
+        source = occupied[0]
+        destination = source
+        disk = pegs[source][0]
+        human_label = "Illegal"
+
+    elif error == "Human Discrepancy":
+        # The move remains legal, but the human label is incorrect.
+        human_label = "Illegal"
+
+    elif error == "Visual Drift":
+        # The move remains legal. Only its reported visual state changes.
+        pass
+
+    else:
+        raise ValueError(f"Unknown fault type: {error}")
+
+    return disk, source, destination, human_label
+
+#
+def construct_fault(error, pegs, disk, source, destination):
+    """
+    Construct a faulty move proposal without changing the board.
+
+    Returns:
+        disk, source, destination, human_label
+
+    Visual-only and human-label faults retain legal moves.
+    """
+
+    human_label = "Legal"
+
+    if error == "Malformed Data":
+        source = "one"
+        human_label = "Illegal"
+
+    elif error == "Invalid Peg ID":
+        destination = 4
+        human_label = "Illegal"
+
+    elif error == "Empty Source Peg":
+        empty_pegs = [p for p in pegs if not pegs[p]]
+
+        if not empty_pegs:
+            raise ValueError("No empty peg available for this fault")
+
+        source = empty_pegs[0]
+        destination = next(p for p in pegs if p != source)
+        human_label = "Illegal"
+
+    elif error == "Ghost Disk":
+        disk = max(
+            d for disks in pegs.values() for d in disks
+        ) + 1
+        human_label = "Illegal"
+
+    elif error == "Size Inversion":
+        candidates = [
+            (src, dst)
+            for src in pegs
+            for dst in pegs
+            if src != dst
+            and pegs[src]
+            and pegs[dst]
+            and pegs[src][0] > pegs[dst][0]
+        ]
+
+        if not candidates:
+            raise ValueError("No size inversion available for this board")
+
+        source, destination = candidates[0]
+        disk = pegs[source][0]
+        human_label = "Illegal"
+
+    elif error == "Identical Pegs":
+        occupied = [p for p in pegs if pegs[p]]
+        source = occupied[0]
+        destination = source
+        disk = pegs[source][0]
+        human_label = "Illegal"
+
+    elif error == "Human Discrepancy":
+        # The move remains legal, but the human label is incorrect.
+        human_label = "Illegal"
+
+    elif error == "Visual Drift":
+        # The move remains legal. Only its reported visual state changes.
+        pass
+
+    else:
+        raise ValueError(f"Unknown fault type: {error}")
+
+    return disk, source, destination, human_label
+
+#
+def get_eligible_faults(pegs):
+    """
+    Determine which fault types can be constructed
+    from the current authoritative board state.
+
+    This function must not modify the board.
+    """
+
+    eligible = {
+        "Malformed Data",
+        "Invalid Peg ID",
+        "Ghost Disk",
+        "Identical Pegs",
+        "Visual Drift",
+        "Human Discrepancy",
+    }
+
+    # An empty-source fault requires an empty peg.
+    if any(not disks for disks in pegs.values()):
+        eligible.add("Empty Source Peg")
+
+    # A size inversion requires two occupied pegs
+    # whose top disks have different sizes.
+    inversion_possible = any(
+        source != destination
+        and pegs[source]
+        and pegs[destination]
+        and pegs[source][0] > pegs[destination][0]
+        for source in pegs
+        for destination in pegs
+    )
+
+    if inversion_possible:
+        eligible.add("Size Inversion")
+
+    return eligible
+
+#
+def plan_fault_locations(base_moves, num_disks, fault_types, seed):
+    """
+    Assign each fault to a distinct eligible reference move.
+
+    The first reference move is reserved as a clean baseline.
+    A local random generator ensures reproducibility.
+    """
+
+    rng = random.Random(seed)
+
+    # Reconstruct the clean board trajectory.
+    pegs = {1: list(range(1, num_disks + 1)), 2: [], 3: []}
+
+    eligible_indices = {fault: [] for fault in fault_types}
+
+    for idx, (disk, source, destination) in enumerate(base_moves):
+
+        if idx > 0:
+            available = get_eligible_faults(pegs)
+
+            for fault in fault_types:
+                if fault in available:
+                    eligible_indices[fault].append(idx)
+
+        legal, reason = apply_hanoi_move(
+            pegs, disk, source, destination
+        )
+
+        if not legal:
+            raise AssertionError(
+                f"Invalid reference move {idx + 1}: {reason}"
+            )
+
+    # Assign the most constrained faults first.
+    ordered_faults = sorted(
+        fault_types,
+        key=lambda fault: len(eligible_indices[fault])
+    )
+
+    assignments = {}
+    used_indices = set()
+
+    def assign(position):
+        if position == len(ordered_faults):
+            return True
+
+        fault = ordered_faults[position]
+        candidates = eligible_indices[fault].copy()
+        rng.shuffle(candidates)
+
+        for idx in candidates:
+            if idx in used_indices:
+                continue
+
+            assignments[fault] = idx
+            used_indices.add(idx)
+
+            if assign(position + 1):
+                return True
+
+            used_indices.remove(idx)
+            del assignments[fault]
+
+        return False
+
+    if not assign(0):
+        raise ValueError(
+            "Unable to place every fault at a distinct eligible "
+            f"reference move using {num_disks} disks."
+        )
+
+    return assignments
+
+
+
+#
+def generate_corrupt_hanoi_sheet(
+    num_disks: int,
+    filename: str,
+    seed: int = 42,
+):
     """
     Generates a Hanoi test spreadsheet containing every error condition
     checked by verify_hanoi.py across an optimal 2^n - 1 move sequence.
     """
-    # Fix the random seed to produce reproducible row selections
-    random.seed(42)
 
     # Compute optimal move count using the recurrence relation limit 2^n - 1
     total_moves = (2**num_disks) - 1
@@ -24,172 +457,278 @@ def generate_corrupt_hanoi_sheet(num_disks: int, filename: str):
             "A minimum of 4 disks (15 moves) is required to test all 8 error cases."
         )
 
-    # Initialize a list to hold optimal legal moves
-    base_moves = []
+    # replaced current solver with an optimal reference sequence
+    base_moves = generate_optimal_moves(num_disks)
+   
+    # Define the negative-test scenarios.
+    fault_types = [
+        "Malformed Data",
+        "Invalid Peg ID",
+        "Empty Source Peg",
+        "Ghost Disk",
+        "Size Inversion",
+        "Identical Pegs",
+        "Visual Drift",
+        "Human Discrepancy",
+    ]
 
-    # Define recursive solver to compute optimal sequence
-    def solve_hanoi(n, source, target, aux):
-        # Base condition: single disk move
-        if n == 1:
-            base_moves.append((1, source, target))
-            return
-        # Move n-1 disks to the auxiliary peg
-        solve_hanoi(n - 1, source, aux, target)
-        # Move the nth disk to the target peg
-        base_moves.append((n, source, target))
-        # Move n-1 disks from auxiliary to target peg
-        solve_hanoi(n - 1, aux, target, source)
+    # Select distinct locations where each fault is possible.
+    error_mapping = plan_fault_locations(
+        base_moves,
+        num_disks,
+        fault_types,
+        seed,
+    )
 
-    # Solve puzzle starting at Peg 1, targeting Peg 3, using Peg 2
-    solve_hanoi(num_disks, 1, 3, 2)
-
-    # Choose 8 distinct row indices between index 1 and total_moves - 1
-    # Index 0 is reserved as a clean legal baseline
-    available_indices = list(range(1, total_moves))
-    random.shuffle(available_indices)
-
-    # Map each error type to a unique row index
-    error_mapping = {
-        "Malformed Data": available_indices.pop(),
-        "Invalid Peg ID": available_indices.pop(),
-        "Empty Source Peg": available_indices.pop(),
-        "Ghost Disk": available_indices.pop(),
-        "Size Inversion": available_indices.pop(),
-        "Identical Pegs": available_indices.pop(),
-        "Visual Drift": available_indices.pop(),
-        "Human Discrepancy": available_indices.pop(),
+    index_to_error = {
+        index: fault
+        for fault, index in error_mapping.items()
     }
 
-    # Invert mapping to look up planned error by row index during iteration
-    index_to_error = {v: k for k, v in error_mapping.items()}
-
-    # Initialize ground-truth peg dictionary with disks sorted on Peg 1
+    # Authoritative board. Only legal moves may change it.
     pegs = {1: list(range(1, num_disks + 1)), 2: [], 3: []}
 
-    # Initialize container to hold output row dictionaries
     rows = []
 
-    # Iterate through each step generated by the solver
-    for idx, (d, src, dst) in enumerate(base_moves):
-        # Human-readable move number (1-indexed)
-        move_num = idx + 1
-        # Retrieve planned error for the current index
-        error = index_to_error.get(idx, "None")
-        # Default human audit label
-        human_val = "Legal"
+    def append_row(disk, source, destination, human_label, fault):
+        """
+        Validate an attempted move, then record its resulting board.
 
-        # ----------------------------------------------------
-        # Execution and Corruption Logic
-        # ----------------------------------------------------
-        if error == "None":
-            # Execute standard move on simulation board
-            disk_val = pegs[src].pop(0)
-            pegs[dst].insert(0, disk_val)
+        Illegal attempts leave the authoritative board unchanged.
+        """
 
-        elif error == "Malformed Data":
-            # Inject a non-numeric string into the From column
-            src = "one"
-            human_val = "Illegal"
+        legal, reason = apply_hanoi_move(
+            pegs, disk, source, destination
+        )
 
-        elif error == "Invalid Peg ID":
-            # Assign an out-of-bounds destination peg identifier
-            dst = 4
-            human_val = "Illegal"
+        # Capture the post-attempt board.
+        visual = snapshot_board(pegs)
 
-        elif error == "Empty Source Peg":
-            # Identify pegs that currently have zero disks
-            empty_pegs = [p for p in pegs if len(pegs[p]) == 0]
-            if empty_pegs:
-                src = empty_pegs[0]
-            else:
-                # Force Peg 2 to be empty if all pegs are occupied
-                src = 2
-                pegs[src] = []
-            # Choose a destination different from the empty source
-            dst = 1 if src != 1 else 3
-            d = 1
-            human_val = "Illegal"
+        # Corrupt only the reported visual state when requested.
+        if fault == "Visual Drift":
+            visual[3] = [99]
 
-        elif error == "Ghost Disk":
-            # Identify pegs with disks to find an active peg
-            occupied = [p for p in pegs if len(pegs[p]) > 0]
-            src = occupied[0]
-            actual_top = pegs[src][0]
-            # Select a disk number that differs from the top disk
-            d = actual_top + 1 if actual_top + 1 <= num_disks else actual_top - 1
-            if d == 0:
-                d = 99
-            # Route to an alternate peg
-            dst = 1 if src != 1 else 2
-            human_val = "Illegal"
-
-        elif error == "Size Inversion":
-            # Select a destination peg that already contains a disk
-            occupied = [p for p in pegs if len(pegs[p]) > 0]
-            dst = occupied[0]
-            target_top = pegs[dst][0]
-            # Select a source peg distinct from destination
-            available_sources = [p for p in pegs if p != dst]
-            src = available_sources[0]
-            # Set the moving disk larger than the target top disk
-            d = target_top + 1
-            # Add this larger disk to the source peg to satisfy top-disk check
-            pegs[src] = [d] + pegs[src]
-            human_val = "Illegal"
-
-        elif error == "Identical Pegs":
-            # Identify a non-empty peg to ensure Gate 3 (Empty Peg) does not trigger
-            occupied = [p for p in pegs if len(pegs[p]) > 0]
-            src = occupied[0]
-            dst = src
-            d = pegs[src][0]
-            human_val = "Illegal"
-
-        elif error == "Visual Drift":
-            # Execute valid physical move, then inject visual corruption later
-            disk_val = pegs[src].pop(0)
-            pegs[dst].insert(0, disk_val)
-            human_val = "Legal"
-
-        elif error == "Human Discrepancy":
-            # Introduce an illegal peg move while human marks it as Legal
-            dst = 5
-            human_val = "Legal"
-
-        # Record visual state as string representations of lists
-        p1_str = str(pegs[1])
-        p2_str = str(pegs[2])
-        p3_str = str(pegs[3])
-
-        # Overwrite visual representation if Visual Drift is targeted
-        if error == "Visual Drift":
-            p3_str = "[99]"
-
-        # Append row dictionary to row collection
         rows.append({
-            "Move #": move_num,
-            "Disk": d,
-            "From": src,
-            "To": dst,
-            "Peg 1": p1_str,
-            "Peg 2": p2_str,
-            "Peg 3": p3_str,
-            "Human Check": human_val,
-            "Targeted Error": error,
+            "Move #": len(rows) + 1,
+            "Disk": disk,
+            "From": source,
+            "To": destination,
+            "Peg 1": str(visual[1]),
+            "Peg 2": str(visual[2]),
+            "Peg 3": str(visual[3]),
+            "Human Check": human_label,
+            "Targeted Error": fault,
         })
+
+        return legal, reason
+
+    # Follow the optimal solution while inserting fault attempts.
+    for idx, (disk, source, destination) in enumerate(base_moves):
+
+        fault = index_to_error.get(idx)
+
+        if fault is not None:
+            faulty_disk, faulty_source, faulty_destination, human_label = (
+                construct_fault(
+                    fault, pegs, disk, source, destination
+                )
+            )
+
+            # Insert the negative-test attempt.
+            legal, reason = append_row(
+                faulty_disk,
+                faulty_source,
+                faulty_destination,
+                human_label,
+                fault,
+            )
+
+            # Physical move faults must be rejected.
+            if fault not in ("Visual Drift", "Human Discrepancy"):
+                if legal:
+                    raise AssertionError(
+                        f"{fault} unexpectedly produced a legal move"
+                    )
+
+            # Visual and human-label faults execute the reference move.
+            else:
+                if not legal:
+                    raise AssertionError(
+                        f"{fault} unexpectedly produced an illegal move: {reason}"
+                    )
+                continue
+
+        # Execute the original optimal move.
+        legal, reason = append_row(
+            disk, source, destination, "Legal", "None"
+        )
+
+        if not legal:
+            raise AssertionError(
+                f"Reference move {idx + 1} was rejected: {reason}"
+            )
 
     # Convert row dictionaries into a pandas DataFrame
     df = pd.DataFrame(rows)
-
     # Save DataFrame to Excel file without index column
     df.to_excel(filename, index=False)
 
     # Print summary of generated test suite
     print(f"Generated test file: {filename}")
-    print(f"Total Rows: {total_moves} (for {num_disks} disks)")
+    # Added rows per number of disks and optimal reference moves
+    print(f"Total Rows: {len(rows)} (for {num_disks} disks)")
+    print(f"Optimal Reference Moves: {total_moves}")
     print("Injected Error Mapping:")
-    for err, r_idx in sorted(error_mapping.items(), key=lambda item: item[1]):
-        print(f"  - Row {r_idx + 1}: {err}")
+    for row in rows:
+        if row["Targeted Error"] != "None":
+            print(
+                f"  - Row {row['Move #']}: "
+                f"{row['Targeted Error']}"
+            )
+# Testing move sequence for optimization
+def test_optimal_moves():
+    moves = generate_optimal_moves(3)
+
+    assert len(moves) == 7
+    assert moves[0] == (1, 1, 3)
+    assert moves[-1] == (1, 1, 3)
+
+    print("Optimal move generator test passed.")
+
+
+def test_board_simulator():
+    # Initialize a three-disk board.
+    pegs = {1: [1, 2, 3], 2: [], 3: []}
+
+    # Test 1: A legal move should update the board.
+    legal, reason = apply_hanoi_move(pegs, 1, 1, 3)
+
+    assert legal is True
+    assert reason == "Legal"
+    assert pegs == {1: [2, 3], 2: [], 3: [1]}
+
+    # Save an independent snapshot.
+    saved_state = snapshot_board(pegs)
+
+    # Test 2: A buried disk must be rejected.
+    legal, reason = apply_hanoi_move(pegs, 3, 1, 2)
+
+    assert legal is False
+    assert reason == "Disk is not the top disk"
+    assert pegs == saved_state
+
+    # Test 3: A larger disk cannot be placed on a smaller disk.
+    legal, reason = apply_hanoi_move(pegs, 2, 1, 3)
+
+    assert legal is False
+    assert reason == "Larger disk onto smaller disk"
+    assert pegs == saved_state
+
+    # Test 4: An empty source must be rejected.
+    legal, reason = apply_hanoi_move(pegs, 1, 2, 1)
+
+    assert legal is False
+    assert reason == "Empty source peg"
+    assert pegs == saved_state
+
+    # Test 5: A second legal move updates the current board.
+    legal, reason = apply_hanoi_move(pegs, 2, 1, 2)
+
+    assert legal is True
+    assert pegs == {1: [3], 2: [2], 3: [1]}
+
+    # The earlier snapshot must remain unchanged.
+    assert saved_state == {1: [2, 3], 2: [], 3: [1]}
+
+    print("Board simulator tests passed.")
+
+#
+def test_fault_results():
+    """
+    Test expected fault classifications against sample verifier results.
+    """
+
+    # A correctly classified illegal move should pass.
+    assert check_fault_result(
+        "Ghost Disk",
+        "Illegal",
+        "Disc 9 is not top disc of peg 1 (Top is 1)"
+    )
+
+    # An incorrect rejection reason should fail.
+    assert not check_fault_result(
+        "Ghost Disk",
+        "Illegal",
+        "Source peg 1 is empty"
+    )
+
+    # An incorrect legality verdict should fail.
+    assert not check_fault_result(
+        "Ghost Disk",
+        "Legal",
+        ""
+    )
+
+    # A legal reporting fault should pass the legality check.
+    assert check_fault_result(
+        "Visual Drift",
+        "Legal",
+        ""
+    )
+
+    # An unknown fault should raise an exception.
+    try:
+        check_fault_result("Unknown Fault", "Illegal", "Invalid peg")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("Unknown fault was not rejected")
+
+    print("Fault result tests passed.")
+
+    
+def test_fault_planner():
+    fault_types = [
+        "Malformed Data",
+        "Invalid Peg ID",
+        "Empty Source Peg",
+        "Ghost Disk",
+        "Size Inversion",
+        "Identical Pegs",
+        "Visual Drift",
+        "Human Discrepancy",
+    ]
+
+    moves = generate_optimal_moves(4)
+
+    first = plan_fault_locations(moves, 4, fault_types, 42)
+    second = plan_fault_locations(moves, 4, fault_types, 42)
+
+    # The same seed must produce identical assignments.
+    assert first == second
+
+    # Every fault must receive one unique reference position.
+    assert set(first) == set(fault_types)
+    assert len(set(first.values())) == len(fault_types)
+
+    # The first move must remain clean.
+    assert all(index > 0 for index in first.values())
+
+    # Check that every assignment is actually eligible.
+    pegs = {1: [1, 2, 3, 4], 2: [], 3: []}
+
+    for idx, (disk, source, destination) in enumerate(moves):
+        for fault, assigned_idx in first.items():
+            if assigned_idx == idx:
+                assert fault in get_eligible_faults(pegs)
+
+        legal, reason = apply_hanoi_move(
+            pegs, disk, source, destination
+        )
+        assert legal, reason
+
+    print("Fault placement planner tests passed.")
+
 
 
 # Define entry point for execution via command-line arguments
@@ -215,9 +754,21 @@ if __name__ == "__main__":
         help="Output filename (default: test_corrupt_hanoi.xlsx)",
     )
 
+    #
+    parser.add_argument(
+    "--seed",
+    type=int,
+    default=42,
+    help="Random seed for reproducible fault placement (default: 42)",
+)
+
     # Parse arguments from command line
     args = parser.parse_args()
 
     # Call generator function
-    generate_corrupt_hanoi_sheet(num_disks=args.disks, filename=args.output)
+    generate_corrupt_hanoi_sheet(
+    num_disks=args.disks,
+    filename=args.output,
+    seed=args.seed,
+)
     

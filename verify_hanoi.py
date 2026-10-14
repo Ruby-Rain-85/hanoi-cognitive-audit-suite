@@ -75,6 +75,27 @@ def parse_peg_cell(cell_val):
 
     return disks
 
+#
+def check_visual_alignment(row, pegs):
+    """
+    Compare the reported peg state with the authoritative board.
+
+    Returns:
+        MATCH: Reported board matches the authoritative board.
+        DRIFT: Reported board is valid but differs from the board.
+        INVALID: Reported board cannot be parsed.
+    """
+    try:
+        reported_pegs = {
+            1: parse_peg_cell(row["Peg 1"]),
+            2: parse_peg_cell(row["Peg 2"]),
+            3: parse_peg_cell(row["Peg 3"]),
+        }
+    except ValueError:
+        return "INVALID"
+
+    return "MATCH" if reported_pegs == pegs else "DRIFT"
+
 # Define the validation function accepting input file, output file, and disk count
 def validate_hanoi_experiment(
     input_file: str, output_file: str, num_discs: int = 8
@@ -179,9 +200,9 @@ def validate_hanoi_experiment(
                     "MATCH" if human_val == "illegal" else "DISCREPANCY"
                 )
 
-            # Skip visual comparison when move identifiers are invalid.
+            # Compare reported visuals against the unchanged authoritative board.
             if has_visual_pegs:
-                visual_matches.append("UNCHECKED")
+                visual_matches.append(check_visual_alignment(row, pegs))
 
             # Evaluate the next row against the unchanged board.
             continue
@@ -205,8 +226,8 @@ def validate_hanoi_experiment(
                 )
                 human_matches.append(match)
 
-            if has_visual_pegs:
-                visual_matches.append("UNCHECKED")
+                if has_visual_pegs:
+                    visual_matches.append(check_visual_alignment(row, pegs))
 
             # Skip board execution
             continue
@@ -229,9 +250,9 @@ def validate_hanoi_experiment(
                 )
                 human_matches.append(match)
             
-            # Checks the visual matches, does not check yet
+            # Compare reported visuals against the unchanged authoritative board.
             if has_visual_pegs:
-                visual_matches.append("UNCHECKED")
+                visual_matches.append(check_visual_alignment(row, pegs))
 
             # Skip board execution
             continue
@@ -259,12 +280,12 @@ def validate_hanoi_experiment(
                 )
                 human_matches.append(match)
 
-            #Continues to confirm visual column output
+            # Compare reported visuals against the unchanged authoritative board.
             if has_visual_pegs:
-                visual_matches.append("UNCHECKED")
+                visual_matches.append(check_visual_alignment(row, pegs))
 
-            # Skip board execution
-            continue
+                # Skip board execution
+                continue
 
         # Rule 4: Cannot place a larger disk on top of a smaller disk
         if len(pegs[dest]) > 0 and pegs[dest][0] < actual_top_disc:
@@ -286,9 +307,9 @@ def validate_hanoi_experiment(
                 )
                 human_matches.append(match)
 
-            # Continues to confirm visual column
+            # Compare the reported board against the unchanged authoritative board.
             if has_visual_pegs:
-                visual_matches.append("UNCHECKED")
+                visual_matches.append(check_visual_alignment(row, pegs))
 
             # Skip board execution
             continue
@@ -313,9 +334,9 @@ def validate_hanoi_experiment(
                 )
                 human_matches.append(match)
 
-            # Continues to confirm visual column
+            # Compare reported visuals against the unchanged authoritative board.
             if has_visual_pegs:
-                visual_matches.append("UNCHECKED")
+                visual_matches.append(check_visual_alignment(row, pegs))
 
             # Skip board execution
             continue
@@ -346,23 +367,9 @@ def validate_hanoi_experiment(
         # of the visual state check, adding three new
         # distinct outcomes; match, drift and invalid
 
-        # Compare the reported post-move board with the simulated board.
+        # Compare the reported board with the authoritative board.
         if has_visual_pegs:
-            try:
-                reported_pegs = {
-                    1: parse_peg_cell(row["Peg 1"]),
-                    2: parse_peg_cell(row["Peg 2"]),
-                    3: parse_peg_cell(row["Peg 3"]),
-                }
-
-            # Distinguish malformed visual data from a valid but wrong state.
-            except ValueError:
-                visual_matches.append("INVALID")
-
-            else:
-                visual_matches.append(
-                    "MATCH" if reported_pegs == pegs else "DRIFT"
-                )
+            visual_matches.append(check_visual_alignment(row, pegs))
 
     # Append the programmatic validation column to the DataFrame
     df["Programmatic Validation"] = prog_validation
